@@ -272,7 +272,7 @@ is_user_in_group(uid_t uid, gid_t gid)
 }
 
 static inline gfarm_error_t
-is_file_readable(int fd, const char *file)
+is_file_readable(int fd, const char *file, bool do_supress_log)
 {
 	gfarm_error_t ret = GFARM_ERR_UNKNOWN;
 
@@ -298,27 +298,34 @@ is_file_readable(int fd, const char *file)
 				ret = GFARM_ERR_NO_ERROR;
 			} else {
 				ret = GFARM_ERR_PERMISSION_DENIED;
-				gflog_tls_error(GFARM_MSG_UNFIXED,
-					"%s: %s", file,
-					gfarm_error_string(ret));
-
+				if (do_supress_log == false) {
+					gflog_tls_error(GFARM_MSG_UNFIXED,
+						"%s: %s", file,
+						gfarm_error_string(ret));
+				}
 			}
 		} else {
 			if (errno != 0) {
-				gflog_tls_error(GFARM_MSG_UNFIXED,
-					"Failed to stat(\"%s\"): %s",
-					file, strerror(errno));
+				if (do_supress_log == false) {
+					gflog_tls_error(GFARM_MSG_UNFIXED,
+						"Failed to stat(\"%s\"): %s",
+						file, strerror(errno));
+				}
 				ret = gfarm_errno_to_error(errno);
 			} else {
-				gflog_tls_error(GFARM_MSG_UNFIXED,
-					"%s is a directory.", file);
+				if (do_supress_log == false) {
+					gflog_tls_error(GFARM_MSG_UNFIXED,
+						"%s is a directory.", file);
+				}
 				ret = GFARM_ERR_IS_A_DIRECTORY;
 			}
 		}
 	} else {
-		gflog_tls_error(GFARM_MSG_UNFIXED,
-			"Specified filename is nul or "
-			"file invalid file descriptor.");
+		if (do_supress_log == false) {
+			gflog_tls_error(GFARM_MSG_UNFIXED,
+				"Specified filename is nul or "
+				"file invalid file descriptor.");
+		}
 		ret = GFARM_ERR_INVALID_ARGUMENT;
 	}
 
@@ -326,7 +333,7 @@ is_file_readable(int fd, const char *file)
 }
 
 static inline gfarm_error_t
-is_valid_prvkey_file_permission(int fd, const char *file)
+is_valid_prvkey_file_permission(int fd, const char *file, bool do_supress_log)
 {
 	gfarm_error_t ret = GFARM_ERR_UNKNOWN;
 
@@ -352,11 +359,13 @@ is_valid_prvkey_file_permission(int fd, const char *file)
 					ret = GFARM_ERR_NO_ERROR;
 				} else {
 					gflog_tls_error(GFARM_MSG_UNFIXED,
-						"The file perrmssion of the "
-						"specified file \"%s\" is "
-						"open too widely. It would "
+						"The file perrmssion "
+						"of the specified "
+						"file \"%s\" is open "
+						"too widely. It would "
 						"be nice if the file "
-						"permission was 0600.", file);
+						"permission was "
+						"0600.", file);
 /* for checkpatch */
 #define GFMERR_PKEY_PERM						\
 	GFARM_ERRMSG_TLS_PRIVATE_KEY_FILE_PERMISSION_TOO_WIDELY_OPEN
@@ -378,9 +387,11 @@ is_valid_prvkey_file_permission(int fd, const char *file)
 			}
 		} else {
 			if (errno != 0) {
-				gflog_tls_error(GFARM_MSG_UNFIXED,
-					"Can't access %s: %s",
-					file, strerror(errno));
+				if (do_supress_log == false) {
+					gflog_tls_error(GFARM_MSG_UNFIXED,
+						"Can't access %s: %s",
+						file, strerror(errno));
+				}
 				ret = gfarm_errno_to_error(errno);
 			} else {
 				gflog_tls_error(GFARM_MSG_UNFIXED,
@@ -458,7 +469,7 @@ has_proxy_cert(void)
 	} else {
 		snprintf(buf, sizeof(buf), "/tmp/x509up_u%u", geteuid());
 	}
-	ge = is_valid_prvkey_file_permission(-1, buf);
+	ge = is_valid_prvkey_file_permission(-1, buf, true);
 	if (ge == GFARM_ERR_NO_ERROR) {
 		ret = strdup(buf);
 	}
@@ -867,7 +878,7 @@ iterate_file_in_a_dir(const char *dir,
 			errno = 0;
 			if (stat(filebuf, &s) == 0 &&
 				S_ISREG(s.st_mode) != 0 &&
-				(ret = is_file_readable(-1, filebuf)) ==
+				(ret = is_file_readable(-1, filebuf, false)) ==
 				GFARM_ERR_NO_ERROR) {
 				iter_n = 0;
 				ret = (func)(filebuf, funcarg, &iter_n);
@@ -921,7 +932,8 @@ tls_load_prvkey(const char *file, EVP_PKEY **keyptr)
 		errno = 0;
 		if (likely(((f = fopen(file, "r")) != NULL) &&
 			((ret = is_valid_prvkey_file_permission(fileno(f),
-					file)) == GFARM_ERR_NO_ERROR))) {
+					file, false)) ==
+			 GFARM_ERR_NO_ERROR))) {
 
 			struct tls_passwd_cb_arg_struct a = {
 				.pw_buf_maxlen_ = sizeof(the_privkey_passwd),
@@ -1624,6 +1636,16 @@ tls_verify_callback_body(int ok, X509_STORE_CTX *sctx)
 			ok = ret = 1;
 			goto done;
 		}
+
+#ifdef TLS_ALLOW_BOGUS_CA_MARKED_EEC
+		if (ctx->do_allow_proxy_cert_ == true &&
+			verr == X509_V_ERR_INVALID_NON_CA) {
+			X509_STORE_CTX_set_error(sctx, X509_V_OK);
+			verr = X509_V_OK;
+			ok = ret = 1;
+			goto done;
+		}
+#endif /* TLS_ALLOW_BOGUS_CA_MARKED_EEC */
 	}
 
 done:
@@ -2074,7 +2096,8 @@ tls_session_create_ctx(struct tls_session_ctx_struct **ctxptr,
 		 * cert/cert chain file (mandatory)
 		 */
 		if ((is_valid_string(tmp_cert_chain_file) == true) &&
-			((ret = is_file_readable(-1, tmp_cert_chain_file))
+			((ret = is_file_readable(-1,
+					tmp_cert_chain_file, true))
 			== GFARM_ERR_NO_ERROR)) {
 			cert_chain_file = strdup(tmp_cert_chain_file);
 			if (unlikely(cert_chain_file == NULL)) {
@@ -2086,7 +2109,7 @@ tls_session_create_ctx(struct tls_session_ctx_struct **ctxptr,
 			}
 		}
 		if ((is_valid_string(tmp_cert_file) == true) &&
-			((ret = is_file_readable(-1, tmp_cert_file))
+			((ret = is_file_readable(-1, tmp_cert_file, true))
 			== GFARM_ERR_NO_ERROR)) {
 			cert_file = strdup(tmp_cert_file);
 			if (unlikely(cert_file == NULL)) {
@@ -2117,7 +2140,10 @@ tls_session_create_ctx(struct tls_session_ctx_struct **ctxptr,
 		/*
 		 * Private key (mandatory)
 		 */
-		if (likely(is_valid_string(tmp_prvkey_file) == true)) {
+		if (likely(is_valid_string(tmp_prvkey_file) == true &&
+			is_valid_prvkey_file_permission(
+				-1, tmp_prvkey_file, true) ==
+			GFARM_ERR_NO_ERROR)) {
 			prvkey_file = strdup(tmp_prvkey_file);
 			if (unlikely(prvkey_file == NULL)) {
 				ret = GFARM_ERR_NO_MEMORY;
