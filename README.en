@@ -72,4 +72,8 @@ List of Documents
 
 - User's manual in HTML format. (both English and Japanese)
 
+- Slides which introduces Gfarm
+  - "Gfarm Grid File System", Osamu Tatebe, External Review for CCS, Oct 30, 2007
+  - https://www.ccs.tsukuba.ac.jp/wp-content/uploads/sites/14/2016/10/comp_tatebe.pdf 
+
 Please see http://oss-tsukuba.org/en/software/gfarm as well.
